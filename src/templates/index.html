@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voronezh Public Cameras</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        header {
+            background-color: #333;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+        }
+        #container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        @media (max-width: 768px) {
+            #container {
+                flex-direction: column;
+            }
+        }
+        #sidebar {
+            width: 300px;
+            background: #f9f9f9;
+            padding: 10px;
+            overflow-y: auto;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+        }
+        @media (max-width: 768px) {
+            #sidebar {
+                width: 100%;
+                height: 40vh;
+                box-shadow: none;
+                border-top: 1px solid #ccc;
+            }
+        }
+        #map {
+            flex: 1;
+            height: 100%;
+        }
+        @media (max-width: 768px) {
+            #map {
+                height: 60vh;
+            }
+        }
+        .filter-section {
+            margin-bottom: 15px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+            margin-bottom: 10px;
+        }
+        select {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+        }
+        .cam-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        .cam-item {
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            cursor: pointer;
+        }
+        .cam-item:hover {
+            background-color: #f1f1f1;
+        }
+        .cam-status {
+            font-size: 12px;
+            padding: 2px 5px;
+            border-radius: 3px;
+        }
+        .status-works {
+            background-color: #d4edda;
+            color: #155724;
+        }
+        .status-broken {
+            background-color: #f8d7da;
+            color: #721c24;
+        }
+        .broken-list-title {
+            margin-top: 20px;
+            color: #d9534f;
+            border-bottom: 1px solid #d9534f;
+            padding-bottom: 5px;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>Voronezh Public Cameras</h1>
+</header>
+
+<div id="container">
+    <div id="sidebar">
+        <div class="filter-section">
+            <input type="text" id="searchInput" placeholder="Поиск камер..." onkeyup="filterCameras()">
+            <select id="statusFilter" onchange="filterCameras()">
+                <option value="all">Все статусы</option>
+                <option value="works">Работает</option>
+                <option value="not working">Не работает</option>
+            </select>
+        </div>
+        <h3>Список камер</h3>
+        <ul id="cameraList" class="cam-list"></ul>
+
+        <h3 class="broken-list-title">Неработающие камеры</h3>
+        <ul id="brokenCameraList" class="cam-list"></ul>
+    </div>
+    <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    let map = L.map('map').setView([51.660781, 39.200296], 12);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    let allCameras = [];
+    let markers = [];
+
+    // Helper to prevent XSS when setting text manually via DOM elements
+    function escapeHtml(unsafe) {
+        return (unsafe || '').toString()
+             .replace(/&/g, "&amp;")
+             .replace(/</g, "&lt;")
+             .replace(/>/g, "&gt;")
+             .replace(/"/g, "&quot;")
+             .replace(/'/g, "&#039;");
+    }
+
+    fetch('/api/cameras')
+        .then(response => response.json())
+        .then(data => {
+            allCameras = data;
+            renderCameras(allCameras);
+        });
+
+    function renderCameras(cameras) {
+        let listEl = document.getElementById('cameraList');
+        let brokenListEl = document.getElementById('brokenCameraList');
+        listEl.innerHTML = '';
+        brokenListEl.innerHTML = '';
+        
+        // Clear map markers
+        markers.forEach(m => map.removeLayer(m));
+        markers = [];
+
+        cameras.forEach(cam => {
+            let item = document.createElement('li');
+            item.className = 'cam-item';
+            
+            let statusClass = cam.status === 'works' ? 'status-works' : 'status-broken';
+            let statusText = cam.status === 'works' ? 'Работает' : 'Не работает';
+            
+            // XSS Protection
+            let safeTitle = escapeHtml(cam.title);
+            let safeOperator = escapeHtml(cam.operator);
+            let safeUrl = encodeURI(cam.url);
+            
+            item.innerHTML = `
+                <strong>${safeTitle}</strong><br>
+                <small>${safeOperator}</small>
+                <span class="cam-status ${statusClass}">${statusText}</span><br>
+                <a href="${safeUrl}" target="_blank" style="font-size: 14px; text-decoration: none; color: #007bff;">Открыть трансляцию</a>
+            `;
+
+            if (cam.lat && cam.lng) {
+                let marker = L.marker([cam.lat, cam.lng]).addTo(map);
+                marker.bindPopup(`
+                    <b>${safeTitle}</b><br>
+                    Опер: ${safeOperator}<br>
+                    <a href="${safeUrl}" target="_blank">Перейти к камере</a>
+                `);
+                markers.push(marker);
+
+                item.onclick = (e) => {
+                    if (e.target.tagName !== 'A') {
+                        map.setView([cam.lat, cam.lng], 16);
+                        marker.openPopup();
+                    }
+                };
+            }
+
+            if (cam.status === 'works') {
+                listEl.appendChild(item);
+            } else {
+                brokenListEl.appendChild(item);
+            }
+        });
+    }
+
+    function filterCameras() {
+        let text = document.getElementById('searchInput').value.toLowerCase();
+        let status = document.getElementById('statusFilter').value;
+
+        let filtered = allCameras.filter(cam => {
+            let matchText = (cam.title || '').toLowerCase().includes(text) || (cam.operator || '').toLowerCase().includes(text);
+            let matchStatus = status === 'all' || cam.status === status;
+            return matchText && matchStatus;
+        });
+
+        renderCameras(filtered);
+    }
+</script>
+</body>
+</html>
